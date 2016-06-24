@@ -15,7 +15,61 @@
 #   all disks online by default, and sets the EC2Config setting such that 
 #   userdata (i.e. this script) is run on every boot.
 
-function install-AWSpackage {
+function Init-Log() {
+    if ($global:logfile) {
+        write-output "Starting log" | out-file $global:logfile
+    }
+}
+function Log-ToFile($logstr) {
+    if ($global:logfile) {
+        write-output $logstr | out-file -append $global:logfile
+    }
+}
+
+function Get-DeviceMappings($BlockDeviceMappings) {
+    # https://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2-windows-volumes.html#windows-list-disks
+    # List the Windows disks
+
+    # Create a hash table that maps each device to a SCSI target
+    $Map = @{"0" = '/dev/sda1'} 
+    for($x = 1; $x -le 25; $x++) {$Map.add($x.ToString(), [String]::Format("xvd{0}",[char](97 + $x)))}
+    for($x = 26; $x -le 51; $x++) {$Map.add($x.ToString(), [String]::Format("xvda{0}",[char](71 + $x)))}
+    for($x = 52; $x -le 77; $x++) {$Map.add($x.ToString(), [String]::Format("xvdb{0}",[char](45 + $x)))}
+    for($x = 78; $x -le 103; $x++) {$Map.add($x.ToString(), [String]::Format("xvdc{0}",[char](19 + $x)))}
+    for($x = 104; $x -le 129; $x++) {$Map.add($x.ToString(), [String]::Format("xvdd{0}",[char]($x - 7)))}
+
+    Get-WmiObject -Class Win32_DiskDrive | % {
+        $Drive = $_
+        # Find the partitions for this drive
+        Get-WmiObject -Class Win32_DiskDriveToDiskPartition |  Where-Object {$_.Antecedent -eq $Drive.Path.Path} | %{
+            $D2P = $_
+            # Get details about each partition
+            $Partition = Get-WmiObject -Class Win32_DiskPartition |  Where-Object {$_.Path.Path -eq $D2P.Dependent}
+            # Find the drive that this partition is linked to
+            $Disk = Get-WmiObject -Class Win32_LogicalDiskToPartition | Where-Object {$_.Antecedent -in $D2P.Dependent} | %{ 
+                $L2P = $_
+                #Get the drive letter for this partition, if there is one
+                Get-WmiObject -Class Win32_LogicalDisk | Where-Object {$_.Path.Path -in $L2P.Dependent}
+            }
+            $BlockDeviceMapping = $BlockDeviceMappings | Where-Object {$_.DeviceName -eq $Map[$Drive.SCSITargetId.ToString()]}
+           
+            # Display the information in a table
+            New-Object PSObject -Property @{
+                Device = $Map[$Drive.SCSITargetId.ToString()];
+                Disk = [Int]::Parse($Partition.Name.Split(",")[0].Replace("Disk #",""));
+                Boot = $Partition.BootPartition;
+                Partition = [Int]::Parse($Partition.Name.Split(",")[1].Replace(" Partition #",""));
+                SCSITarget = $Drive.SCSITargetId;
+                DriveLetter = If($Disk -eq $NULL) {""} else {$Disk.DeviceID};
+                VolumeName = If($Disk -eq $NULL) {""} else {$Disk.VolumeName};
+                VolumeId = If($BlockDeviceMapping -eq $NULL) {"NA"} else {$BlockDeviceMapping.Ebs.VolumeId}
+            }
+        }
+    } | Sort-Object Disk, Partition | Format-Table -AutoSize -Property Disk, Partition, SCSITarget, DriveLetter, Boot, 
+    VolumeId, Device, VolumeName
+}
+
+function Install-AWSpackage {
     # Try the import
     $junk=(Import-Module AWSPowerShell)
     $m=(Get-Module -Name "AWSPowerShell")
@@ -23,6 +77,7 @@ function install-AWSpackage {
         # Already installed.
         return
     }
+    Log-ToFile "Installing AWS Tools"
     $awsurl="http://sdk-for-net.amazonwebservices.com/latest/AWSToolsAndSDKForNet.msi"
     $outdir="C:\Downloads"
     $isoutdir=Test-Path -path $outdir
@@ -47,6 +102,7 @@ function Enable-UserData {
     $xml=[xml](Get-Content $path) 
     $node=($xml.Ec2ConfigurationSettings.Plugins.Plugin | where {$_.Name -eq "Ec2HandleUserData"})
     if ($node.State -ne "Enabled") {
+        Log-ToFile "Enabling User Data for each boot"
         $node.State="Enabled"
         $xml.Save($path)
     }    
@@ -96,23 +152,23 @@ function RelabelAndMapDrives {
     $bdm=$inst.BlockDeviceMappings | ?{$_.DeviceName -ne "/dev/sda1"}
     $map=@{}
     # Get list of logical disks to match EC2 devices
-    # Relying on Windows disks and EC2 devices to be in reversed order.  Not at all sure this is reliable
-    $ldisks = Get-LogicalDisks
+    $ldisks = Get-DeviceMappings $inst.BlockDeviceMappings
     $lindex=$bdm.Length # Initialize
     $refresh=0
     foreach ($b in $bdm) {  
-        # Count up for EBS block devices.
-        $lindex-- # Start at ($bdm.Length - 1) and count down for Win32_LogicalDisks
         $volid=$b.Ebs.VolumeId
         $driveletter=(get-ec2Tag -region $region -accesskey $aki -secretkey $sak -sessiontoken $tok -Filter @{ Name="resource-id";Values="$volid"},@{ Name="key";Values="DriveLetter"}).Value
         $drivelabel=(get-ec2Tag -region $region -accesskey $aki -secretkey $sak -sessiontoken $tok -Filter @{ Name="resource-id";Values="$volid"},@{ Name="key";Values="DriveLabel"}).Value
-        if ( $ldisks -and $drivelabel) {
-            $ld=$ldisks[$lindex]
-            $ntfslbl=$ld.VolumeName
-            $dlett=$ld.DeviceID
+        Log-ToFile "Volid: $volid / Driveletter: $driveletter / Drivelabel $drivelabel" 
+        $match=($ldisks | where {$_.Device -eq $volid})
+        if ($match) {
+            $ntfslbl=$match.VolumeName
+            $dlett=$ld.DriveLetter
+           Log-ToFile "Volid $volid (Label $drivelabel / Driveletter $driveletter) maps to -> (Label $ntfslbl / Driveletter $dlett)" 
             if ($ntfslbl -ne $drivelabel) {
+                Log-ToFile "Relabelling $ntfslbl to $drivelabel" 
                 # Relabel disk to match EC2 Tag for drive label
-                $disk=Get-WMIObject win32_volume | Where {$_.DriveLetter -eq $dlett}
+                $disk=Get-WMIObject win32_volume | Where {$_.Label -eq $ntfslbl}
                 if ($disk) {
                     $disk.Label=$drivelabel
                     $junk=$disk.Put()
@@ -145,13 +201,6 @@ function Get-EC2Metadata($item) {
     (Invoke-WebRequest -uri $uri -UseBasicParsing).Content
 }
 
-function Get-LogicalDisks {
-    # Skip the first disk, and only get the first partition on any disk.
-    #  This works fine for auto-formatted EBS disks, since a new device is given a single partition
-    #  and then formatted with NTFS.
-    get-wmiobject win32_diskpartition | where {($_.diskindex -ne 0) -and ($_.index -eq 0) } | %{$_.getrelated('Win32_LogicalDisk')}
-}
-
 function Get-FreeDriveLetter {
     # http://www.powershellmagazine.com/2012/01/12/find-an-unused-drive-letter/
     for($j=67;gdr($d=[char]++$j)2>0){}$d + ':'
@@ -164,12 +213,14 @@ function Fix-DriveLetters($tempdrive,$map) {
     #  If you had to move a drive out of the way, move it to the labelled drive's original letter.
     foreach($h in $map.GetEnumerator()) {
         $driveletter=$h.Value
-        $label=$h.Name        
+        $label=$h.Name   
+        Log-ToFile "Label $label / Letter $driveletter"
         $lqry="Label = '$label'"
         $drive=Get-WMIObject win32_volume -filter "$lqry"
         if ($drive) {
             $dl=$drive.DriveLetter
             if ( $dl -ne $driveletter) {
+                Log-ToFile " - Currently mounted at $dl"     
                 $dlqry="DriveLetter = '$driveletter'"
                 $movedrive=Get-WMIObject win32_volume -filter "$dlqry"
                 if ($movedrive) {
@@ -177,12 +228,15 @@ function Fix-DriveLetters($tempdrive,$map) {
                         Throw 'Could not get free drive letter; cannot swap disks.'
                         return # Not reached
                     }
+                    Log-ToFile  " -- Move $driveletter -> $tempdrive"                      
                     $movedrive.DriveLetter=$tempdrive
                     $junk=$movedrive.Put()
                 }
+                Log-ToFile " - Move $dl -> $driveletter"                                   
                 $drive.DriveLetter=$driveletter
                 $junk=$drive.Put()
                 if ($movedrive) {
+                    Log-Tofile " -- Move $tempdrive -> $dl"                               
                     $movedrive.DriveLetter=$dl
                     $junk=$movedrive.Put()
                 }
@@ -192,6 +246,7 @@ function Fix-DriveLetters($tempdrive,$map) {
 }
 
 function Run-StartupScripts {
+    Log-ToFile "Running Startup Scripts"
     $startscriptpath="C:\Scripts\Startup"
     Run-Scripts($startscriptpath)
 }
@@ -204,11 +259,15 @@ function Run-Scripts($path) {
     $scripts=(Get-ChildItem -Path $path | Where { $_.Extension -eq ".ps1" } | Sort).Name
     foreach ($s in $scripts) {
         $spath=$path + '\' + $s
+        Log-ToFile "Running script $spath"
         Invoke-Expression $spath
+        Log-ToFile "Ran script $spath"
     }
 }
 
 function main {
+    $global:logfile="C:\userdata-log.txt" # Comment out to turn off logs
+    Init-Log
     # It's actually run as unrestricted anyway
     Set-ExecutionPolicy RemoteSigned
     Install-AWSPackage
