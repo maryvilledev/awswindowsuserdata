@@ -35,8 +35,8 @@ into the instance, is handy.
   tightened if you want to.  This is in Step 3: Configure Instance
   Details, if you're launching a new instance from the console.
 
-* Put the Powershell script between <powershell> </powershell> tags, and
-  put that in the User Data field of a Windows instance you're
+* Put the Powershell script between `<powershell>` `</powershell>` tags,
+  and put that in the User Data field of a Windows instance you're
   launching.  It's in Step 3: Configure Instance Details, down at the
   bottom inside Advanced Details, if you're using the console.
 
