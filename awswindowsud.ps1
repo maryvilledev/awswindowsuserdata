@@ -65,8 +65,7 @@ function Get-DeviceMappings($BlockDeviceMappings) {
                 VolumeId = If($BlockDeviceMapping -eq $NULL) {"NA"} else {$BlockDeviceMapping.Ebs.VolumeId}
             }
         }
-    } | Sort-Object Disk, Partition | Format-Table -AutoSize -Property Disk, Partition, SCSITarget, DriveLetter, Boot, 
-    VolumeId, Device, VolumeName
+    } | Sort-Object Disk, Partition | Select-Object
 }
 
 function Install-AWSpackage {
@@ -153,6 +152,8 @@ function RelabelAndMapDrives {
     $map=@{}
     # Get list of logical disks to match EC2 devices
     $ldisks = Get-DeviceMappings $inst.BlockDeviceMappings
+    $lstr=$ldisks | out-string
+    Log-ToFile "Device Mappings: $lstr"
     $lindex=$bdm.Length # Initialize
     $refresh=0
     foreach ($b in $bdm) {  
@@ -160,8 +161,11 @@ function RelabelAndMapDrives {
         $driveletter=(get-ec2Tag -region $region -accesskey $aki -secretkey $sak -sessiontoken $tok -Filter @{ Name="resource-id";Values="$volid"},@{ Name="key";Values="DriveLetter"}).Value
         $drivelabel=(get-ec2Tag -region $region -accesskey $aki -secretkey $sak -sessiontoken $tok -Filter @{ Name="resource-id";Values="$volid"},@{ Name="key";Values="DriveLabel"}).Value
         Log-ToFile "Volid: $volid / Driveletter: $driveletter / Drivelabel $drivelabel" 
-        $match=($ldisks | where {$_.Device -eq $volid})
+        $match=($ldisks | where {$_.VolumeId -eq $volid})
+        $mstr=$match | out-string
+        Log-Tofile "Match: $mstr"
         if ($match) {
+
             $ntfslbl=$match.VolumeName
             $dlett=$ld.DriveLetter
            Log-ToFile "Volid $volid (Label $drivelabel / Driveletter $driveletter) maps to -> (Label $ntfslbl / Driveletter $dlett)" 
