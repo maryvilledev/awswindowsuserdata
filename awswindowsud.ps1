@@ -292,7 +292,6 @@ function main {
     Init-Log
     Install-AWSPackage
     Enable-UserData
-    #Save-UserData
     Remap-Drives
     Run-StartupScripts
 }
