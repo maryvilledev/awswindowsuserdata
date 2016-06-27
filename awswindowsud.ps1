@@ -81,7 +81,7 @@ function Install-AWSpackage {
     $outdir="C:\Downloads"
     $isoutdir=Test-Path -path $outdir
     if (! $isoutdir) {
-        New-Item -type directory $outdir
+        $junk=(New-Item -type directory $outdir)
     }
     $output=$outdir + "\awssdk.msi"
     $wc=New-Object System.Net.WebClient
@@ -111,7 +111,7 @@ function Remap-Drives {
     Set-StorageSetting -NewDiskPolicy OnlineAll
     $diskset=Get-NonBootDisks
     ForceReadWrite-Disks($diskset)
-    Reattach-Disks($diskset)
+    Online-AllDisks($diskset)
     # Get mapping
     $map=RelabelAndMapDrives
     $tempdrive=Get-FreeDriveLetter
@@ -126,13 +126,22 @@ function Get-NonBootDisks {
 
 function ForceReadWrite-Disks($diskset) {
     # All non-boot disks become read-write 
-    echo $diskset | set-Disk -isReadOnly $false
+    $diskset | % { set-Disk -number $_.Number -isReadOnly $false}
 }
 
-function Reattach-Disks($diskset) {    
+function Online-AllDisks($diskset) {    
     # Detach, then reattach, disks in presented diskset
-    foreach ($b in ($true,$false)) {echo $diskset | set-Disk -isOffline $b }
-    Update-HostStorageCache
+    $update=$false
+    foreach ($d in $diskset) {
+        if ( $d.OperationalStatus -eq "Offline" ) {
+            Log-ToFile "Bringing disk $d.Number online"
+            set-Disk -number $d.Number -isOffline $false
+            $update=$true
+        }
+    }
+    if ($update) {
+        Update-HostStorageCache
+    }
 }
 
 function RelabelAndMapDrives {
@@ -158,6 +167,10 @@ function RelabelAndMapDrives {
     $refresh=0
     foreach ($b in $bdm) {  
         $volid=$b.Ebs.VolumeId
+        if ($volid -eq "NA") {
+            # Not an EBS volume.
+            continue
+        }
         $driveletter=(get-ec2Tag -region $region -accesskey $aki -secretkey $sak -sessiontoken $tok -Filter @{ Name="resource-id";Values="$volid"},@{ Name="key";Values="DriveLetter"}).Value
         $drivelabel=(get-ec2Tag -region $region -accesskey $aki -secretkey $sak -sessiontoken $tok -Filter @{ Name="resource-id";Values="$volid"},@{ Name="key";Values="DriveLabel"}).Value
         Log-ToFile "Volid: $volid / Driveletter: $driveletter / Drivelabel $drivelabel" 
@@ -165,10 +178,9 @@ function RelabelAndMapDrives {
         $mstr=$match | out-string
         Log-Tofile "Match: $mstr"
         if ($match) {
-
             $ntfslbl=$match.VolumeName
-            $dlett=$ld.DriveLetter
-           Log-ToFile "Volid $volid (Label $drivelabel / Driveletter $driveletter) maps to -> (Label $ntfslbl / Driveletter $dlett)" 
+            $dlett=$match.DriveLetter
+            Log-ToFile "Volid $volid (Label $drivelabel / Driveletter $driveletter) maps to -> (Label $ntfslbl / Driveletter $dlett)" 
             if ($ntfslbl -ne $drivelabel) {
                 Log-ToFile "Relabelling $ntfslbl to $drivelabel" 
                 # Relabel disk to match EC2 Tag for drive label
@@ -206,8 +218,11 @@ function Get-EC2Metadata($item) {
 }
 
 function Get-FreeDriveLetter {
-    # http://www.powershellmagazine.com/2012/01/12/find-an-unused-drive-letter/
-    for($j=67;gdr($d=[char]++$j)2>0){}$d + ':'
+    # Pick out all single-letter drives
+    $used=Get-PSDrive | Select-Object -Expand Name | Where-Object { $_.Length -eq 1 }
+    # Start at D: (char 68)
+    $dr=(68..90 | ForEach-Object { [string][char]$_ } | where { $used -notcontains $_} | select-object -first 1)
+    $dr + ":"
 }
 
 function Fix-DriveLetters($tempdrive,$map) {
@@ -270,12 +285,13 @@ function Run-Scripts($path) {
 }
 
 function main {
+    # It's actually run as unrestricted anyway
+    Set-ExecutionPolicy RemoteSigned -force    
     $global:logfile="C:\userdata-log.txt" # Comment out to turn off logs
     Init-Log
-    # It's actually run as unrestricted anyway
-    Set-ExecutionPolicy RemoteSigned
     Install-AWSPackage
     Enable-UserData
+    #Save-UserData
     Remap-Drives
     Run-StartupScripts
 }
