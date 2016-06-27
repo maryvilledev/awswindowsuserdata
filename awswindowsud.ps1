@@ -185,7 +185,11 @@ function RelabelAndMapDrives {
             if ($ntfslbl -ne $drivelabel) {
                 Log-ToFile "Relabelling $ntfslbl to $drivelabel" 
                 # Relabel disk to match EC2 Tag for drive label
-                $disk=Get-WMIObject win32_volume | Where {$_.Label -eq $ntfslbl}
+                if ($ntfslbl) {
+                    $disk=Get-WMIObject win32_volume | Where {$_.Label -eq $ntfslbl}
+                } else {
+                    $disk=Get-WMIObject win32_volume | where {$_.DriveLetter -eq $dlett}
+                }
                 if ($disk) {
                     $disk.Label=$drivelabel
                     $junk=$disk.Put()
