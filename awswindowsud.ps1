@@ -134,8 +134,9 @@ function Online-AllDisks($diskset) {
     $update=$false
     foreach ($d in $diskset) {
         if ( $d.OperationalStatus -eq "Offline" ) {
-            Log-ToFile "Bringing disk $d.Number online"
-            set-Disk -number $d.Number -isOffline $false
+            $dnum=$d.Number
+            Log-ToFile "Bringing disk $dnum online"
+            set-Disk -number $dnum -isOffline $false
             $update=$true
         }
     }
@@ -164,7 +165,7 @@ function RelabelAndMapDrives {
     $lstr=$ldisks | out-string
     Log-ToFile "Device Mappings: $lstr"
     $lindex=$bdm.Length # Initialize
-    $refresh=0
+    $refresh=$false
     foreach ($b in $bdm) {  
         $volid=$b.Ebs.VolumeId
         if ($volid -eq "NA") {
@@ -188,7 +189,7 @@ function RelabelAndMapDrives {
                 if ($disk) {
                     $disk.Label=$drivelabel
                     $junk=$disk.Put()
-                    $refresh=1
+                    $refresh=$true
                 }
             }
         }
