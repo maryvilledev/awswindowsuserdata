@@ -1,3 +1,4 @@
+
 # Used for AWS Windows AMI Userdata.
 #
 # Two main functions:
@@ -17,12 +18,21 @@
 
 function Init-Log() {
     if ($global:logfile) {
-        write-output "Starting log" | out-file $global:logfile
+        $datestamp = Get-Date -format u
+        $l = "${datestamp}: "
+        if ( test-path $global:logfile ) {
+            write-output "${l}Restarting log" | out-file -append $global:logfile
+        } else {
+            write-output "${l}Starting log" | out-file $global:logfile
+        }
     }
 }
+
 function Log-ToFile($logstr) {
     if ($global:logfile) {
-        write-output $logstr | out-file -append $global:logfile
+        $datestamp = Get-Date -format u
+        $l = "${datestamp}: ${logstr}"
+        write-output $l | out-file -append $global:logfile
     }
 }
 
