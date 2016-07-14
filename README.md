@@ -27,13 +27,12 @@ into the instance, is handy.
 
 ### Drive Mapping
 
-* Configure the instance IAM role to be "readonlyEC2" (or change the
-  role name in the script).  The role needs to be able to examine the
-  instance, examine the attached EBS volumes, and read the tags on those
-  volumes.  The existing Amazon policies ReadOnlyAccess or
-  AmazonEC2ReadOnlyAccess are certainly broad enough, but could be
-  tightened if you want to.  This is in Step 3: Configure Instance
-  Details, if you're launching a new instance from the console.
+* Create an instance with an attached role.  The role needs to be able
+  to examine the instance, examine the attached EBS volumes, and read
+  the tags on those volumes.  The existing Amazon policies
+  ReadOnlyAccess or AmazonEC2ReadOnlyAccess are certainly broad enough,
+  but could be tightened if you want to.  This is in Step 3: Configure
+  Instance Details, if you're launching a new instance from the console.
 
 * Put the Powershell script between `<powershell>` `</powershell>` tags,
   and put that in the User Data field of a Windows instance you're
